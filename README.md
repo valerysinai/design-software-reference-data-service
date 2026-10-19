@@ -6,6 +6,14 @@ hexagonal (ADR-006): `cmd → adapter → application → domain`. Contract-firs
 
 ---
 
+## R1 — Resiliencia y mensajería
+
+La implementación y la reproducción del reto individual están en
+[`docs/R1-VALIDACION.md`](docs/R1-VALIDACION.md). Ejecutar
+`./scripts/run-r1-verification.ps1` para probar outbox transaccional, inbox
+idempotente, retry/DLQ y caos real con RabbitMQ. El entorno es independiente
+del usado para HU-REF-020.
+
 ## HU-REF-020 — Integración real con IAM
 
 La validación reproducible actual de autenticación y autorización está en

@@ -9,8 +9,50 @@ import (
 	"testing"
 	"time"
 
+	"github.com/code-sena/design-software-reference-data-service/internal/adapter/out/persistence"
 	application "github.com/code-sena/design-software-reference-data-service/internal/application/hierarchy"
 )
+
+func TestPersistedEnvelopeKeepsIdentityAndTimestamp(t *testing.T) {
+	event, err := persistence.NewOutboxEvent("catalog", "catalog-id", "reference.catalog.updated", map[string]string{"catalog_id": "catalog-id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher := NewAMQPPublisher("unused")
+	var bodies [][]byte
+	publisher.publish = func(_ context.Context, _, _ string, body []byte) error {
+		bodies = append(bodies, append([]byte(nil), body...))
+		return nil
+	}
+	for i := 0; i < 2; i++ {
+		if err := publisher.PublishPersisted(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !bytes.Equal(bodies[0], bodies[1]) {
+		t.Fatal("persisted event envelope changed across replay")
+	}
+	var envelope application.EventEnvelope
+	if err := json.Unmarshal(bodies[0], &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.EventID != event.EventID.String() || envelope.OccurredAt != event.CreatedAt.UTC().Format(time.RFC3339Nano) {
+		t.Fatal("envelope did not preserve committed ID/time")
+	}
+}
+
+func TestPersistedEventIsNotAcceptedWhenBrokerAndDLQFail(t *testing.T) {
+	event, err := persistence.NewOutboxEvent("catalog", "catalog-id", "reference.catalog.updated", map[string]string{"catalog_id": "catalog-id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher := NewAMQPPublisher("unused")
+	publisher.backoff = []time.Duration{time.Nanosecond, time.Nanosecond, time.Nanosecond}
+	publisher.publish = func(context.Context, string, string, []byte) error { return errors.New("offline") }
+	if err := publisher.PublishPersisted(context.Background(), event); err == nil {
+		t.Fatal("broker and DLQ failure must leave event pending/failed in outbox")
+	}
+}
 
 func TestTrainingCenterCreatedEventOmitsPII(t *testing.T) {
 	var output bytes.Buffer

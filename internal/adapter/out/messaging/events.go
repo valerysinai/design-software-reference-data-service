@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/code-sena/design-software-reference-data-service/internal/adapter/out/persistence"
 	"io"
 	"time"
 
@@ -20,7 +21,7 @@ const (
 	dlqRetention      = 7 * 24 * time.Hour
 )
 
-var retryBackoff = []time.Duration{time.Second, 5 * time.Second, 30 * time.Second}
+var retryBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
 type JSONPublisher struct {
 	writer io.Writer
@@ -109,6 +110,26 @@ func (p *AMQPPublisher) PublishOutboxEvent(ctx context.Context, eventID, eventTy
 	return p.publishEnvelopeWithID(ctx, eventType, payload, correlationID, eventID)
 }
 
+// PublishPersisted keeps the committed ID, timestamp and JSON payload stable
+// across relay retries and process restarts. DLQ handoff is durable and explicit.
+func (p *AMQPPublisher) PublishPersisted(ctx context.Context, event persistence.OutboxEvent) error {
+	envelope, err := application.NewEventEnvelope(event.EventType, event.Payload, "", event.CreatedAt)
+	if err != nil {
+		return err
+	}
+	envelope.EventID = event.EventID.String()
+	envelope.Timestamp = event.CreatedAt.UTC().Format(time.RFC3339Nano)
+	envelope.OccurredAt = envelope.Timestamp
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	if err := p.publishWithRetry(ctx, p.exchange, event.EventType, body); err == nil {
+		return nil
+	}
+	return p.publish(ctx, projectionDeadExchange, event.EventType, body)
+}
+
 func (p *AMQPPublisher) publishWithRetry(ctx context.Context, exchange, routingKey string, body []byte) error {
 	err := p.publish(ctx, exchange, routingKey, body)
 	if err == nil {
@@ -131,6 +152,8 @@ func (p *AMQPPublisher) publishWithRetry(ctx context.Context, exchange, routingK
 }
 
 func (p *AMQPPublisher) publishAMQP(ctx context.Context, exchange, routingKey string, body []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	conn, err := amqp.DialConfig(p.url, amqp.Config{Dial: amqp.DefaultDial(5 * time.Second)})
 	if err != nil {
 		return err
@@ -152,6 +175,11 @@ func (p *AMQPPublisher) publishAMQP(ctx context.Context, exchange, routingKey st
 			return err
 		}
 	}
+	if exchange == projectionDeadExchange {
+		if err := DeclareProjectionTopology(channel); err != nil {
+			return err
+		}
+	}
 	confirms := channel.NotifyPublish(make(chan amqp.Confirmation, 1))
 	returns := channel.NotifyReturn(make(chan amqp.Return, 1))
 	carrier := propagation.MapCarrier{}
@@ -160,7 +188,12 @@ func (p *AMQPPublisher) publishAMQP(ctx context.Context, exchange, routingKey st
 	for key, value := range carrier {
 		headers[key] = value
 	}
+	var identity struct {
+		EventID string `json:"event_id"`
+	}
+	_ = json.Unmarshal(body, &identity)
 	if err := channel.PublishWithContext(ctx, exchange, routingKey, true, false, amqp.Publishing{
+		MessageId:    identity.EventID,
 		ContentType:  "application/json",
 		DeliveryMode: amqp.Persistent,
 		Timestamp:    time.Now().UTC(),

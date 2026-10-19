@@ -49,6 +49,16 @@ func main() {
 	var publisher application.EventPublisher
 	var commands *application.CommandService
 	if amqpURL := env("REFERENCE_DATA_AMQP_URL", os.Getenv("MESSAGE_BROKER_URL")); amqpURL != "" {
+		if err := messaging.EnsureProjectionTopology(amqpURL); err != nil {
+			log.Printf("broker unavailable at startup; outbox retains events: %v", err)
+		}
+		projection := application.NewProjectionService(persistence.NewInboxStore(db))
+		consumer := messaging.NewConsumer(amqpURL, projection.Handle)
+		go func() {
+			if err := consumer.Run(context.Background()); err != nil {
+				log.Printf("projection consumer stopped: %v", err)
+			}
+		}()
 		amqpPublisher := messaging.NewAMQPPublisher(amqpURL)
 		publisher = amqpPublisher
 		commands = application.NewCommandService(repository, application.WithEventPublisher(publisher), application.WithTransactionalOutbox())
