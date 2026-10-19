@@ -19,7 +19,15 @@ import (
 // HTTP services. Credentials are supplied by the environment and never stored
 // in the repository.
 func TestHURef019ParametersWithRealIAMJWT(t *testing.T) {
-	config, ok := huRef019E2EConfig(t)
+	runParametersWithRealIAMJWT(t)
+}
+
+func TestHURef020ParametersWithRealIAMJWT(t *testing.T) {
+	runParametersWithRealIAMJWT(t)
+}
+
+func runParametersWithRealIAMJWT(t *testing.T) {
+	config, ok := huRefIAME2EConfig(t)
 	if !ok {
 		return
 	}
@@ -49,7 +57,7 @@ func TestHURef019ParametersWithRealIAMJWT(t *testing.T) {
 
 	referenceDataURL := strings.TrimRight(config.referenceDataBaseURL, "/")
 
-	key := fmt.Sprintf("HU_REF_019_%d", time.Now().UnixNano())
+	key := fmt.Sprintf("HU_REF_020_%d", time.Now().UnixNano())
 	var parameter struct {
 		ID string `json:"id"`
 	}
@@ -61,7 +69,7 @@ func TestHURef019ParametersWithRealIAMJWT(t *testing.T) {
 		t.Fatalf("admin list parameters: got %d, want 200", status)
 	}
 	create := parameterRequest(t, referenceDataURL, http.MethodPost, "/parameters", admin.AccessToken, map[string]any{
-		"key": key, "value": "48", "value_type": "integer", "description": "Fixture E2E HU-REF-019",
+		"key": key, "value": "48", "value_type": "integer", "description": "Fixture E2E HU-REF-020",
 	})
 	if create.StatusCode != http.StatusCreated {
 		_ = create.Body.Close()
@@ -96,33 +104,58 @@ func TestHURef019ParametersWithRealIAMJWT(t *testing.T) {
 			t.Fatalf("invalid or missing token: got %d, want 401", status)
 		}
 	}
+
+	// A correctly shaped token with a modified signature must also be rejected.
+	parts := strings.Split(admin.AccessToken, ".")
+	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || len(signature) == 0 {
+		t.Fatal("IAM returned an invalid JWT signature encoding")
+	}
+	signature[0] ^= 1
+	parts[2] = base64.RawURLEncoding.EncodeToString(signature)
+	if status := parameterStatus(t, referenceDataURL, http.MethodGet, "/parameters", strings.Join(parts, "."), nil); status != http.StatusUnauthorized {
+		t.Fatalf("modified JWT signature: got %d, want 401", status)
+	}
+	t.Log("E3 PASS: real IAM login; expected issuer, subject, expiry, roles and scoped features")
+	t.Log("E4 PASS: admin GET 200 / POST 201 / PUT 200; learner GET/POST/PUT 403; missing, malformed and modified-signature JWT 401")
 }
 
-type huRef019Config struct {
+type huRefIAMConfig struct {
 	dsn, iamBaseURL, referenceDataBaseURL, issuer string
 	adminEmail, adminPassword                     string
 	learnerEmail, learnerPassword                 string
 }
 
-func huRef019E2EConfig(t *testing.T) (huRef019Config, bool) {
+func huRefIAME2EConfig(t *testing.T) (huRefIAMConfig, bool) {
 	t.Helper()
-	config := huRef019Config{
-		dsn:                   os.Getenv("REFERENCE_DATA_TEST_DSN"),
-		iamBaseURL:            strings.TrimRight(os.Getenv("HU_REF_019_IAM_BASE_URL"), "/"),
-		referenceDataBaseURL:  strings.TrimRight(os.Getenv("HU_REF_019_REFERENCE_DATA_BASE_URL"), "/"),
-		issuer:                os.Getenv("IAM_JWT_ISSUER"),
-		adminEmail:            os.Getenv("HU_REF_019_ADMIN_EMAIL"),
-		adminPassword:         os.Getenv("HU_REF_019_ADMIN_PASSWORD"),
-		learnerEmail:          os.Getenv("HU_REF_019_LEARNER_EMAIL"),
-		learnerPassword:       os.Getenv("HU_REF_019_LEARNER_PASSWORD"),
+	config := huRefIAMConfig{
+		dsn:                  os.Getenv("REFERENCE_DATA_TEST_DSN"),
+		iamBaseURL:           strings.TrimRight(huRefIAMSetting("IAM_BASE_URL"), "/"),
+		referenceDataBaseURL: strings.TrimRight(huRefIAMSetting("REFERENCE_DATA_BASE_URL"), "/"),
+		issuer:               os.Getenv("IAM_JWT_ISSUER"),
+		adminEmail:           huRefIAMSetting("ADMIN_EMAIL"),
+		adminPassword:        huRefIAMSetting("ADMIN_PASSWORD"),
+		learnerEmail:         huRefIAMSetting("LEARNER_EMAIL"),
+		learnerPassword:      huRefIAMSetting("LEARNER_PASSWORD"),
 	}
 	for _, value := range []string{config.dsn, config.iamBaseURL, config.referenceDataBaseURL, config.issuer, config.adminEmail, config.adminPassword, config.learnerEmail, config.learnerPassword} {
 		if value == "" {
+			if os.Getenv("HU_REF_020_REQUIRED") == "true" {
+				t.Fatal("HU-REF-020 requires database, issuer, service URLs and fixture credentials; refusing to skip the E2E")
+			}
 			t.Skip("HU-REF-019 E2E requires REFERENCE_DATA_TEST_DSN, IAM_JWT_ISSUER, HU_REF_019_IAM_BASE_URL, HU_REF_019_REFERENCE_DATA_BASE_URL and external IAM credentials")
-			return huRef019Config{}, false
+			return huRefIAMConfig{}, false
 		}
 	}
 	return config, true
+}
+
+// Keep HU-REF-019 compatibility while naming the integration by its own HU.
+func huRefIAMSetting(suffix string) string {
+	if value := os.Getenv("HU_REF_020_" + suffix); value != "" {
+		return value
+	}
+	return os.Getenv("HU_REF_019_" + suffix)
 }
 
 type iamLoginResult struct {
