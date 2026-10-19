@@ -6,6 +6,15 @@ hexagonal (ADR-006): `cmd → adapter → application → domain`. Contract-firs
 
 ---
 
+## HU-REF-020 — Integración real con IAM
+
+La validación reproducible actual de autenticación y autorización está en
+[`docs/HU-REF-020-VALIDACION.md`](docs/HU-REF-020-VALIDACION.md).
+Desde este repositorio, ejecutar `./scripts/run-hu-ref-020-e2e.ps1` en PowerShell,
+con Docker Desktop iniciado y los repositorios hermanos descritos en esa guía.
+El runner compila IAM con Java 21, migra una base aislada y ejecuta la prueba
+con JWT/JWKS reales. Los secretos son locales y no se versionan.
+
 ## HU-REF-010 — Levantado local E2E
 
 Esta sección documenta el procedimiento reproducible para ejecutar el
