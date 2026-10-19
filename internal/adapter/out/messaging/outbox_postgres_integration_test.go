@@ -33,7 +33,13 @@ func TestCreateAndOutboxCommitAtomically(t *testing.T) {
 	name := "Outbox integration test"
 	command := application.Command{Name: &name, Code: &code}
 	item, err := repo.CreateWithOutbox(ctx, "catalogs", command, "catalog", "reference.catalog.updated", func(item json.RawMessage) (any, error) {
-		return map[string]any{"item": json.RawMessage(item)}, nil
+		var created struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(item, &created); err != nil {
+			return nil, err
+		}
+		return application.CatalogUpdated{CatalogID: created.ID, CatalogCode: code}, nil
 	})
 	if err != nil {
 		t.Fatal(err)

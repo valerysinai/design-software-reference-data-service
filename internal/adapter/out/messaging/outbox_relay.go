@@ -2,12 +2,10 @@ package messaging
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/code-sena/design-software-reference-data-service/internal/adapter/out/persistence"
-	application "github.com/code-sena/design-software-reference-data-service/internal/application/hierarchy"
 )
 
 // OutboxRelay publishes pending outbox messages to RabbitMQ.
@@ -33,7 +31,9 @@ func (r *OutboxRelay) Run(ctx context.Context) error {
 		}
 		if err := r.store.LockAndProcess(ctx, 20, r.publishOne); err != nil {
 			// A temporary PostgreSQL outage must not permanently stop the relay.
-			time.Sleep(r.interval)
+			if !waitContext(ctx, r.interval) {
+				return nil
+			}
 			continue
 		}
 		timer := time.NewTimer(r.interval)
@@ -50,19 +50,8 @@ func (r *OutboxRelay) publishOne(ctx context.Context, event persistence.OutboxEv
 	if r.publisher == nil {
 		return errors.New("outbox relay publisher is nil")
 	}
-	if event.EventType == "reference.catalog.updated" {
-		var payload application.CatalogUpdated
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		return r.publisher.PublishOutboxEvent(ctx, event.EventID.String(), event.EventType, payload)
-	}
-	if event.EventType == "reference.training_center.created" {
-		var payload application.TrainingCenterCreated
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		return r.publisher.PublishOutboxEvent(ctx, event.EventID.String(), event.EventType, payload)
+	if event.EventType == "reference.catalog.updated" || event.EventType == "reference.training_center.created" {
+		return r.publisher.PublishPersisted(ctx, event)
 	}
 	return errors.New("unsupported outbox event type: " + event.EventType)
 }
